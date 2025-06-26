@@ -3,13 +3,14 @@ import threading
 import requests
 import time
 from datetime import datetime
+import os
 
 app = Flask(__name__)
 
 # 사용자 설정 (1명만)
 USER = {
-    "bot_token": os.getenv("TELEGRAM_BOT_TOKEN_GM"),
-    "chat_id": os.getenv("TELEGRAM_CHAT_ID_GM"),
+    "bot_token": os.getenv("TELEGRAM_BOT_TOKEN"),
+    "chat_id": os.getenv("TELEGRAM_CHAT_ID"),
     "alerts_enabled": True,
     "black_list": set(),
 }
