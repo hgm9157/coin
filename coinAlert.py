@@ -8,11 +8,12 @@ app = Flask(__name__)
 
 # 사용자 설정 (1명만)
 USER = {
-    "bot_token": "7942016306:AAF1J0J1jLd2cc1Zb7ugXACZyqw9dk2gh5c",  # 광민
-    "chat_id": "7957347483",
+    "bot_token": os.getenv("TELEGRAM_BOT_TOKEN_GM"),
+    "chat_id": os.getenv("TELEGRAM_CHAT_ID_GM"),
     "alerts_enabled": True,
     "black_list": set(),
 }
+
 
 INTERVAL = 60  # 주기 (초)
 last_update_id = None
