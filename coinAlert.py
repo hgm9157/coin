@@ -2,7 +2,7 @@ from flask import Flask
 import threading
 import requests
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import os
 
 app = Flask(__name__)
@@ -20,8 +20,33 @@ INTERVAL = 60  # 주기 (초)
 last_update_id = None
 
 
+def is_funding_within_30min(funding_next_apply: int) -> bool:
+    KST = timezone(timedelta(hours=9))
+    now_kst = datetime.now(KST)
+    now_ts = now_kst.timestamp()
+
+    seconds_left = funding_next_apply - now_ts
+    return 0 < seconds_left <= 1800  # 30분 = 1800초
+
+
 def seconds_to_hours(seconds):
     return round(seconds / 3600, 2)
+
+
+# ✅ Gate.io 펀딩비 조회 함수
+def get_gateio_latest_funding_rate(contract: str) -> float:
+    url = "https://api.gateio.ws/api/v4/futures/usdt/funding_rate"
+    headers = {"Accept": "application/json"}
+    params = {"contract": contract, "limit": 1}
+
+    try:
+        res = requests.get(url, headers=headers, params=params, timeout=10)
+        res.raise_for_status()
+        data = res.json()
+        return float(data[0]["r"]) if data else None
+    except Exception as e:
+        print(f"[{contract}] 펀딩비 조회 실패:", e)
+        return None
 
 
 def get_spot_contracts(symbol):
@@ -66,34 +91,63 @@ def get_futures_contracts(symbol, apr):
 
     url = f"https://api.gateio.ws/api/v4/futures/usdt/contracts/{symbol}"
     headers = {"Accept": "application/json", "Content-Type": "application/json"}
+
     try:
         r = requests.get(url, headers=headers, timeout=10)
         r.raise_for_status()
         data = r.json()
+
+        funding_next_apply = float(data["funding_next_apply"])  # 펀딩 남은시간
+
+        KST = timezone(timedelta(hours=9))
+        now = datetime.now(KST)
+        now_ts = now.timestamp()
+
+        seconds_left = int(funding_next_apply - now_ts)
+        time_left = str(timedelta(seconds=seconds_left))
+
         spot_price = get_spot_contracts(symbol)
         future_price = float(data["last_price"])
-        if spot_price is None or future_price is None:
+
+        if spot_price is None:
+            print(f"{symbol}: 현물가격 없음 → 패스")
             return
+
+        if future_price is None:
+            print(f"{symbol}: 선물가격 없음 → 패스")
+            return
+
         diff = float(spot_price) - float(future_price)
         funding_interval_hr = seconds_to_hours(data["funding_interval"])
-        funding_rate = round(float(data["funding_rate"]) * 100, 4)
-        now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+
+        # 펀딩 남은시간 30분이내인 경우 실시간
+        if is_funding_within_30min(seconds_left):
+            funding_rate = float(data["funding_rate"]) * 100
+        # 더남은 경우 이전회차 펀딩비율
+        else:
+            funding_rate = get_gateio_latest_funding_rate(symbol) * 100
+
+        # 계산
         daily_apr = float(apr) / 365
         funding_times_per_day = int(24 / funding_interval_hr)
-        daily_funding_fee = -funding_rate * funding_times_per_day
+        daily_funding_fee = -funding_rate * funding_times_per_day  # % 단위
         expected_daily_return = round(daily_apr - daily_funding_fee, 4)
+
+        # 출력
         msg = (
-            f"⏱ <b>{now}</b>\n"
-            f"코인 : {symbol}\n"
-            f"현물가격 : {spot_price}\n"
-            f"선물가격 : {future_price}\n"
-            f"현물-선물 갭 : {format(diff, '.6f')}\n"
-            f"펀딩비계산주기 : {funding_interval_hr}시간\n"
-            f"펀딩비율 : {funding_rate}%\n"
-            f"APR : {apr}\n"
-            f"일 APR (%) : {round(daily_apr, 4)}\n"
-            f"하루 펀딩비 (%) : {round(daily_funding_fee, 4)}\n"
-            f"기대수익(일%) : {expected_daily_return}"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"🔔 <b>{symbol}</b> 알림\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"💱 <b>현물가격</b> : {spot_price} USDT\n"
+            f"📈 <b>선물가격</b> : {future_price} USDT\n"
+            f"↔️ <b>현물-선물 갭</b> : {format(diff, '.6f')} USDT\n\n"
+            f"⏳ <b>펀딩 주기</b> : {funding_interval_hr}시간\n"
+            f"💸 <b>펀딩비율</b> : {round(funding_rate,4)}%\n"
+            f"🕒 <b>다음 펀딩까지</b> : {time_left}\n\n"
+            f"📌 <b>APR</b> : {apr}%\n"
+            f"📅 <b>일간 APR</b> : {round(daily_apr, 4)}%\n"
+            f"💰 <b>하루 펀딩비</b> : {round(daily_funding_fee, 4)}%\n"
+            f"📊 <b>예상 일 수익률</b> : {expected_daily_return}%"
         )
         send_telegram_message(msg)
     except Exception as e:
