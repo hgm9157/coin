@@ -18,7 +18,7 @@ USER = {
     "coin_list": set(),
 }
 
-INTERVAL = 30  # 기본 주기 최초 30초 
+INTERVAL = 30  # 기본 주기 최초 5분
 last_update_id = None
 openCondition = 0.4
 closeCondition = 1
@@ -232,12 +232,13 @@ def telegram_command_listener():
                 params["offset"] = last_update_id + 1
             r = requests.get(url, params=params, timeout=65)
             r.raise_for_status()
-            print(r)
+
             updates = r.json()["result"]
             for update in updates:
                 last_update_id = update["update_id"]
                 message = update.get("message", {})
                 text = message.get("text", "").strip().upper()
+                print(f"✅ 명령어 입력 : {text}")
                 chat_id = str(message.get("chat", {}).get("id"))
                 if chat_id != USER["chat_id"]:
                     continue
@@ -246,11 +247,11 @@ def telegram_command_listener():
                         "<b>📘 명령어 안내</b>\n\n"
                         "▶ <b>중지</b>\n  - 현재 감시 및 알림을 일시 중지합니다.\n\n"
                         "▶ <b>실행</b>\n  - 감시를 다시 시작하고 텔레그램 알림을 재개합니다.\n\n"
-                        "▶ <b>목록</b>\n  - APR감시 전체 코인 목록을 불러옵니다.\n\n"
+                        "▶ <b>정보</b>\n - 전체 감시 가능 코인 목록, 현재 모니터링 중인 코인, 진입 대상 코인을 한눈에 요약해 보여줍니다.\n\n"
                         "▶ <b>추가 [코인]</b>\n  - 특정 코인을 감시 대상에 추가합니다.\n  예: 추가 DMC\n\n"
                         "▶ <b>제거 [코인]</b>\n  - 특정 코인을 감시 대상에서 제외합니다.\n  예: 제거 DMC\n\n"
                         "▶ <b>진입 [코인]</b>\n  - 포지션 진입 대상에 추가합니다.\n  예: 진입 DMC\n\n"
-                        "▶ <b>확인</b>\n  - 현재 모니터링중인 코인 목록을 확인합니다.\n\n"
+                        "▶ <b>초기화</b>\n - 현재 모니터링 중인 코인, 진입 대상 코인을 전부 초기화합니다.\n\n"
                         "▶ <b>기준 [하한,상한]</b>\n  - 수익률 기준 설정 (예: 기준 0.4,1) 기본값 0.4 ~ 1\n\n"
                         "▶ <b>주기 [초]</b>\n  - 감시 루프 간격을 초 단위로 설정합니다.\n  예: 주기 180\n\n"
                     )
@@ -269,6 +270,34 @@ def telegram_command_listener():
                         "📋 전체 코인 목록:\n"
                         + (", ".join(coin_list) if coin_list else "없음")
                     )
+
+                elif text == "초기화":
+                    # 모니터링 및 진입 대상 초기화
+                    USER["monitoring_coins"] = []
+                    USER["entry_coins"] = []
+                    send_telegram_message(
+                        "✅ <b>초기화 완료</b>\n"
+                        "모니터링 대상과 진입 대상 코인을 모두 초기화했습니다."
+                    )
+                elif text == "정보":
+                    msg = (
+                        "<b>📊 현재 상태 요약</b>\n\n"
+                        "🔹 <b>전체 감시 가능 코인 목록</b> ({0}개)\n"
+                        "{1}\n\n"
+                        "🔸 <b>모니터링 중인 코인</b> ({2}개)\n"
+                        "{3}\n\n"
+                        "🚀 <b>진입 대상 코인</b> ({4}개)\n"
+                        "{5}"
+                    ).format(
+                        len(USER["coin_list"]),
+                        ", ".join(USER["coin_list"]) or "없음",
+                        len(USER["monitoring_coins"]),
+                        ", ".join(USER["monitoring_coins"]) or "없음",
+                        len(USER["entry_coins"]),
+                        ", ".join(USER["entry_coins"]) or "없음",
+                    )
+
+                    send_telegram_message(msg)
 
                 elif text.startswith("주기 "):
                     try:
