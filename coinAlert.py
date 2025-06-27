@@ -18,7 +18,7 @@ USER = {
     "coin_list": set(),
 }
 
-INTERVAL = 30  # 기본 주기 최초 30초
+INTERVAL = 30  # 기본 주기 최초 30초 
 last_update_id = None
 openCondition = 0.4
 closeCondition = 1
