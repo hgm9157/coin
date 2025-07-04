@@ -273,8 +273,8 @@ def telegram_command_listener():
 
                 elif text == "초기화":
                     # 모니터링 및 진입 대상 초기화
-                    USER["monitoring_coins"] = []
-                    USER["entry_coins"] = []
+                    USER["monitoring_coins"] = set()
+                    USER["entry_coins"] = set()
                     send_telegram_message(
                         "✅ <b>초기화 완료</b>\n"
                         "모니터링 대상과 진입 대상 코인을 모두 초기화했습니다."
