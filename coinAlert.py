@@ -8,7 +8,6 @@ import os
 
 app = Flask(__name__)
 
-# 사용자 설정 (1명만)
 USER = {
     "bot_token": os.getenv("TELEGRAM_BOT_TOKEN"),
     "chat_id": os.getenv("TELEGRAM_CHAT_ID"),
@@ -16,9 +15,9 @@ USER = {
     "monitoring_coins": set(),
     "entry_coins": set(),
     "coin_list": set(),
+    "interval": 30  # 감시 주기 (초)
 }
 
-INTERVAL = 30  # 기본 주기 최초 5분
 last_update_id = None
 openCondition = 0.4
 closeCondition = 1
@@ -27,7 +26,6 @@ closeCondition = 1
 def is_funding_within_30min(funding_next_apply: int) -> bool:
     now_utc_ts = datetime.utcnow().timestamp()
     seconds_left = funding_next_apply - now_utc_ts
-
     KST = timezone(timedelta(hours=9))
     now_kst = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
     print(f"🕒 현재 KST: {now_kst} | 남은 초: {seconds_left:.2f}")
@@ -77,7 +75,7 @@ def get_gateio_usdt_futures_symbols():
         response = requests.get(url, headers=headers)
         response.raise_for_status()
         contracts = response.json()
-        symbols = [item["name"] for item in contracts if item["in_delisting"] == False]
+        symbols = [item["name"] for item in contracts if not item["in_delisting"]]
         return symbols
     except Exception as e:
         print("❌ 오류 발생:", e)
@@ -105,15 +103,8 @@ def get_futures_contracts(symbol, apr):
         spot_price = get_spot_contracts(symbol)
         future_price = float(data["last_price"])
 
-        if (
-            spot_price is None
-            or future_price is None
-            or spot_price == 0
-            or future_price == 0
-        ):
-            print(
-                f"⚠️ {symbol} - 가격이 None 또는 0 (spot: {spot_price}, future: {future_price})"
-            )
+        if spot_price is None or future_price is None or spot_price == 0 or future_price == 0:
+            print(f"⚠️ {symbol} - 가격이 None 또는 0 (spot: {spot_price}, future: {future_price})")
             return
 
         spot_price = float(spot_price)
@@ -142,16 +133,10 @@ def get_futures_contracts(symbol, apr):
         msg_type = None
 
         if coin in USER["monitoring_coins"]:
-
-            # 진입 목록에 포함된 경우
             if coin in USER["entry_coins"]:
-                if (
-                    closeCondition <= expected_daily_return
-                ):  # 일일수익률이 기준을 넘은 경우
+                if closeCondition <= expected_daily_return:
                     msg_type = "🔻 포지션 정리 추천"
-            elif (
-                expected_daily_return <= openCondition
-            ):  # 일일수익률이 기준보다 낮은 경우
+            elif expected_daily_return <= openCondition:
                 msg_type = "🔺 포지션 진입 추천"
 
         if msg_type:
@@ -163,7 +148,7 @@ def get_futures_contracts(symbol, apr):
                 f"📈 <b>선물가격</b> : {future_price} USDT\n"
                 f"↔️ <b>현물-선물 갭</b> : {gap_pct:.6f}%\n\n"
                 f"⏳ <b>펀딩 주기</b> : {funding_interval_hr}시간\n"
-                f"💸 <b>펀딩비율</b> : {round(funding_rate,4)}%\n"
+                f"💸 <b>펀딩비율</b> : {round(funding_rate, 4)}%\n"
                 f"🕒 <b>다음 펀딩까지</b> : {time_left}\n\n"
                 f"📌 <b>APR</b> : {apr}%\n"
                 f"📅 <b>일간 APR</b> : {round(daily_apr, 4)}%\n"
@@ -180,16 +165,15 @@ def get_futures_contracts(symbol, apr):
 def monitor_loop():
     while True:
         if not USER["alerts_enabled"]:
-            time.sleep(INTERVAL)
+            time.sleep(USER["interval"])
             continue
         apr_dict = get_active_launchpool_aprs()
         USER["coin_list"] = apr_dict.keys()
-
         for coin, apr in apr_dict.items():
             symbol = f"{coin}_USDT"
             get_futures_contracts(symbol, apr)
-        print(f"⏳ {INTERVAL}초 후 반복...\n")
-        time.sleep(INTERVAL)
+        print(f"⏳ {USER['interval']}초 후 반복...\n")
+        time.sleep(USER["interval"])
 
 
 def get_active_launchpool_aprs():
@@ -232,7 +216,6 @@ def telegram_command_listener():
                 params["offset"] = last_update_id + 1
             r = requests.get(url, params=params, timeout=65)
             r.raise_for_status()
-
             updates = r.json()["result"]
             for update in updates:
                 last_update_id = update["update_id"]
@@ -242,20 +225,18 @@ def telegram_command_listener():
                 chat_id = str(message.get("chat", {}).get("id"))
                 if chat_id != USER["chat_id"]:
                     continue
+
                 if text == "/":
-                    msg = (
+                    send_telegram_message(
                         "<b>📘 명령어 안내</b>\n\n"
-                        "▶ <b>중지</b>\n  - 현재 감시 및 알림을 일시 중지합니다.\n\n"
-                        "▶ <b>실행</b>\n  - 감시를 다시 시작하고 텔레그램 알림을 재개합니다.\n\n"
-                        "▶ <b>정보</b>\n - 전체 감시 가능 코인 목록, 현재 모니터링 중인 코인, 진입 대상 코인을 한눈에 요약해 보여줍니다.\n\n"
-                        "▶ <b>추가 [코인]</b>\n  - 특정 코인을 감시 대상에 추가합니다.\n  예: 추가 DMC\n\n"
-                        "▶ <b>제거 [코인]</b>\n  - 특정 코인을 감시 대상에서 제외합니다.\n  예: 제거 DMC\n\n"
-                        "▶ <b>진입 [코인]</b>\n  - 포지션 진입 대상에 추가합니다.\n  예: 진입 DMC\n\n"
-                        "▶ <b>초기화</b>\n - 현재 모니터링 중인 코인, 진입 대상 코인을 전부 초기화합니다.\n\n"
-                        "▶ <b>기준 [하한,상한]</b>\n  - 수익률 기준 설정 (예: 기준 0.4,1) 기본값 0.4 ~ 1\n\n"
-                        "▶ <b>주기 [초]</b>\n  - 감시 루프 간격을 초 단위로 설정합니다.\n  예: 주기 180\n\n"
+                        "▶ <b>중지</b> / <b>실행</b>\n"
+                        "▶ <b>정보</b> / <b>초기화</b>\n"
+                        "▶ <b>추가 [코인]</b> / <b>제거 [코인]</b>\n"
+                        "▶ <b>진입 [코인]</b>\n"
+                        "▶ <b>기준 [하한,상한]</b>\n"
+                        "▶ <b>주기 [초]</b>\n"
                     )
-                    send_telegram_message(msg)
+
                 elif text == "중지":
                     USER["alerts_enabled"] = False
                     send_telegram_message("⛔ 알림이 중지되었습니다.")
@@ -264,29 +245,14 @@ def telegram_command_listener():
                     USER["alerts_enabled"] = True
                     send_telegram_message("✅ 알림이 재개되었습니다.")
 
-                elif text == "목록":
-                    coin_list = USER["coin_list"]
-                    send_telegram_message(
-                        "📋 전체 코인 목록:\n"
-                        + (", ".join(coin_list) if coin_list else "없음")
-                    )
-
-                elif text == "초기화":
-                    # 모니터링 및 진입 대상 초기화
-                    USER["monitoring_coins"] = set()
-                    USER["entry_coins"] = set()
-                    send_telegram_message(
-                        "✅ <b>초기화 완료</b>\n"
-                        "모니터링 대상과 진입 대상 코인을 모두 초기화했습니다."
-                    )
                 elif text == "정보":
                     msg = (
                         "<b>📊 현재 상태 요약</b>\n\n"
-                        "🔹 <b>전체 감시 가능 코인 목록</b> ({0}개)\n"
+                        "🔹 전체 감시 가능 코인 ({0}개)\n"
                         "{1}\n\n"
-                        "🔸 <b>모니터링 중인 코인</b> ({2}개)\n"
+                        "🔸 모니터링 중 ({2}개)\n"
                         "{3}\n\n"
-                        "🚀 <b>진입 대상 코인</b> ({4}개)\n"
+                        "🚀 진입 대상 ({4}개)\n"
                         "{5}"
                     ).format(
                         len(USER["coin_list"]),
@@ -296,19 +262,15 @@ def telegram_command_listener():
                         len(USER["entry_coins"]),
                         ", ".join(USER["entry_coins"]) or "없음",
                     )
-
                     send_telegram_message(msg)
 
                 elif text.startswith("주기 "):
                     try:
                         seconds = int(text.split(" ")[1])
-                        global INTERVAL
-                        INTERVAL = seconds
-                        send_telegram_message(
-                            f"⏱️ 감시 주기가 {seconds}초로 변경되었습니다."
-                        )
+                        USER["interval"] = seconds
+                        send_telegram_message(f"⏱️ 감시 주기: {seconds}초")
                     except:
-                        send_telegram_message("⚠️ 포맷 오류: 주기 180 (단위: 초)")
+                        send_telegram_message("⚠️ 포맷 오류: 주기 180")
 
                 elif text.startswith("추가 "):
                     try:
@@ -317,10 +279,9 @@ def telegram_command_listener():
                             send_telegram_message("⚠️ 존재하지 않는 코인입니다.")
                             continue
                         USER["monitoring_coins"].add(coin)
-
-                        send_telegram_message(f"✅ {coin} 감시 대상에 추가되었습니다.")
+                        send_telegram_message(f"✅ {coin} 감시 대상 추가됨.")
                     except:
-                        send_telegram_message("⚠️ 포맷 오류: 예) 추가 DMC")
+                        send_telegram_message("⚠️ 포맷 오류: 추가 DMC")
 
                 elif text.startswith("제거 "):
                     coin = text.split(" ")[1].upper()
@@ -335,32 +296,23 @@ def telegram_command_listener():
                             send_telegram_message("⚠️ 존재하지 않는 코인입니다.")
                             continue
                         USER["entry_coins"].add(coin)
-                        USER["monitoring_coins"].add(coin)  # 모니터링 대상도 추가
-
-                        send_telegram_message(
-                            f"✅ {coin} 포지션 진입 대상에 추가되었습니다."
-                        )
+                        USER["monitoring_coins"].add(coin)
+                        send_telegram_message(f"✅ {coin} 포지션 진입 대상 추가됨.")
                     except:
-                        send_telegram_message("⚠️ 포맷 오류: 예) 진입 DMC")
+                        send_telegram_message("⚠️ 포맷 오류: 진입 DMC")
 
-                elif text == "확인":
-                    clist = USER["monitoring_coins"]
-                    send_telegram_message(
-                        "📋 모니터링 중인 코인 목록:\n"
-                        + (", ".join(clist) if clist else "없음")
-                    )
+                elif text == "초기화":
+                    USER["monitoring_coins"] = set()
+                    USER["entry_coins"] = set()
+                    send_telegram_message("✅ 초기화 완료")
 
                 elif text.startswith("기준 "):
                     try:
                         parts = text.split(" ")[1]
                         openCondition, closeCondition = map(float, parts.split(","))
-                        send_telegram_message(
-                            f"✅ 포지션 기준이 {openCondition}% ~ {closeCondition}%로 변경되었습니다."
-                        )
+                        send_telegram_message(f"📈 기준 변경: {openCondition} ~ {closeCondition}")
                     except:
-                        send_telegram_message(
-                            "⚠️ 포맷 오류: 진입 0.4,1 형태로 입력 필요"
-                        )
+                        send_telegram_message("⚠️ 포맷 오류: 기준 0.4,1")
         except Exception as e:
             print("❌ 명령 수신 오류:", e)
             traceback.print_exc()
