@@ -22,6 +22,8 @@ last_update_id = None
 openCondition = 0.4
 closeCondition = 1
 
+# 주기 변경을 알리는 이벤트 객체 생성
+interval_changed_event = threading.Event()
 
 def is_funding_within_30min(funding_next_apply: int) -> bool:
     now_utc_ts = datetime.utcnow().timestamp()
@@ -165,16 +167,30 @@ def get_futures_contracts(symbol, apr):
 def monitor_loop():
     while True:
         if not USER["alerts_enabled"]:
+            # 알림이 중지되었을 때는 현재 주기에 따라 대기 (이벤트 감지 불필요)
             time.sleep(USER["interval"])
             continue
+
         apr_dict = get_active_launchpool_aprs()
-        USER["coin_list"] = apr_dict.keys()
+        USER["coin_list"] = set(apr_dict.keys()) # set으로 변환하여 할당
         for coin, apr in apr_dict.items():
             symbol = f"{coin}_USDT"
             get_futures_contracts(symbol, apr)
-        print(f"⏳ {USER['interval']}초 후 반복...\n")
-        time.sleep(USER["interval"])
 
+        print(f"⏳ {USER['interval']}초 후 반복...\n")
+
+        # 새로운 대기 로직: interval_changed_event.wait()를 사용하여 인터럽트 가능
+        interval_remaining = USER["interval"]
+        while interval_remaining > 0:
+            # 0.1초마다 대기하고, 그 동안 이벤트가 설정되었는지 확인
+            slept_time = 0.1
+            # wait()가 True를 반환하면 이벤트가 설정되어 인터럽트된 것
+            if interval_changed_event.wait(slept_time):
+                interval_changed_event.clear() # 이벤트 플래그 초기화
+                break # 즉시 루프를 빠져나가 새로운 주기를 적용
+            interval_remaining -= slept_time
+        # 루프가 정상적으로 끝나면 전체 주기가 경과한 것
+        # 루프가 일찍 중단되면 (break), 다음 반복에서 새로운 주기가 적용됨
 
 def get_active_launchpool_aprs():
     url = "https://www.gate.io/apiw/v2/earn/launch-pool/project-list"
@@ -269,6 +285,8 @@ def telegram_command_listener():
                         seconds = int(text.split(" ")[1])
                         USER["interval"] = seconds
                         send_telegram_message(f"⏱️ 감시 주기: {seconds}초")
+                        # 주기 변경 시 이벤트 설정 (monitor_loop가 즉시 반응하도록)
+                        interval_changed_event.set()
                     except:
                         send_telegram_message("⚠️ 포맷 오류: 주기 180")
 
